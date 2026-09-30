@@ -23,6 +23,7 @@ regions = ["us"]
 #   user         -> JOBS_BY_USER: your own jobs, no extra permissions
 scope = "project"
 projects = ["my-admin-project", "my-data-project"]
+# folder = "123456789012"   # scope = folder: the folder billing_project sits in; `bqtop --check` verifies it
 
 # audit_log only: the routed data-access table.
 # table = "my-admin-project.bq_audit_logs.cloudaudit_googleapis_com_data_access"

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3 (2026-09-30)
+
+- `--init` for a folder now asks *which folder*, offering the folders above your default project by
+  name, and picks a project inside it to run from automatically. `[source].folder` records the choice and
+  `--check` warns when the billing project is not directly inside it.
+
 ## 0.3.2 (2026-09-30)
 
 - `--init` redone after first-user feedback: what-to-watch comes first, numbered choices that also

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -13,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
+from bqtop import gcp
 from bqtop.config import default_config_path
 
 EXAMPLE = Path(__file__).with_name("config.example.toml")
@@ -35,90 +35,6 @@ PRICINGS = [
 
 
 # ---- detection -----------------------------------------------------------------------------------
-def _gcloud(*args: str) -> str:
-    try:
-        r = subprocess.run(
-            ["gcloud", *args, "--format=value(.)"], capture_output=True, text=True, timeout=8, check=False
-        )
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-
-
-def detect_project() -> str:
-    out = _gcloud("config", "get-value", "project")
-    if out and out != "(unset)":
-        return out
-    try:
-        import google.auth
-
-        _, project = google.auth.default()
-        return project or ""
-    except Exception:
-        return ""
-
-
-def detect_parent(project: str) -> tuple[str, str, str]:
-    """(parent type, parent id, display name) of a project via gcloud, else the Resource Manager API with the
-    machine's Google credentials; empty strings when neither works."""
-    ptype, pid, name = _parent_via_gcloud(project)
-    if not ptype:
-        ptype, pid, name = _parent_via_api(project)
-    return ptype, pid, name
-
-
-def _parent_via_gcloud(project: str) -> tuple[str, str, str]:
-    try:
-        r = subprocess.run(
-            ["gcloud", "projects", "describe", project, "--format=value(parent.type,parent.id)"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
-        )
-        parts = r.stdout.split()
-        if r.returncode != 0 or len(parts) != 2:
-            return "", "", ""
-        ptype, pid = parts
-        name = ""
-        if ptype == "folder":
-            r2 = subprocess.run(
-                ["gcloud", "resource-manager", "folders", "describe", pid, "--format=value(displayName)"],
-                capture_output=True,
-                text=True,
-                timeout=8,
-                check=False,
-            )
-            name = r2.stdout.strip() if r2.returncode == 0 else ""
-        return ptype, pid, name
-    except (OSError, subprocess.TimeoutExpired):
-        return "", "", ""
-
-
-def _parent_via_api(project: str) -> tuple[str, str, str]:
-    try:
-        import google.auth
-        from google.auth.transport.requests import AuthorizedSession
-
-        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        s = AuthorizedSession(creds)
-        r = s.get(f"https://cloudresourcemanager.googleapis.com/v3/projects/{project}", timeout=8)
-        if r.status_code != 200:
-            return "", "", ""
-        parent = r.json().get("parent", "")  # "folders/123" or "organizations/456"
-        if "/" not in parent:
-            return "", "", ""
-        kind, pid = parent.split("/", 1)
-        ptype = {"folders": "folder", "organizations": "organization"}.get(kind, kind)
-        name = ""
-        if ptype == "folder":
-            r2 = s.get(f"https://cloudresourcemanager.googleapis.com/v3/folders/{pid}", timeout=8)
-            name = r2.json().get("displayName", "") if r2.status_code == 200 else ""
-        return ptype, pid, name
-    except Exception:
-        return "", "", ""
-
-
 def detect_timezone() -> str:
     tz = os.environ.get("TZ")
     if tz and _valid_tz(tz):
@@ -186,6 +102,60 @@ def _toml_list(xs: list[str]) -> str:
     return "[" + ", ".join(f'"{x}"' for x in xs) + "]"
 
 
+def pick_folder(console: Console, detected_project: str) -> tuple[str, str, str, str]:
+    """Ask which folder to watch. Offers the folders above the default project, probes which of them the
+    current identity can actually watch, defaults to the widest one, and finds the project inside it to run
+    from. Returns (runner project, folder id, label, region)."""
+    chain = [n for n in gcp.ancestors(detected_project) if n.kind == "folder"] if detected_project else []
+    runners: dict[str, tuple[str, str]] = {}
+    if chain:
+        console.print(f"\n  [dim]checking which folders above {detected_project} you can watch…[/dim]")
+        for n in chain:
+            runners[n.id] = gcp.find_runner(n.id)
+        options = []
+        for i, n in enumerate(chain):
+            if runners[n.id][0]:
+                tag = "  [green]✓ can watch[/green]"
+            elif runners[n.id][1] == "empty":
+                tag = "  [dim]no projects directly inside[/dim]"
+            else:
+                tag = "  [dim]no access[/dim]"
+            here = f"  ← contains {detected_project}" if i == 0 else ""
+            options.append((n.id, f"{n.label}{here}{tag}"))
+        options.append(("other", "another folder (type its id)"))
+        watchable = [n.id for n in chain if runners[n.id][0]]
+        default = watchable[-1] if watchable else chain[0].id
+        choice = choose(console, "2/6  Which folder?", options, default)
+        folder_id = choice if choice != "other" else ask(console, "     Folder id", hint="digits, e.g. 123456789012")
+    else:
+        folder_id = ask(
+            console,
+            "2/6  Which folder? (id)",
+            hint="digits, e.g. 123456789012 · `gcloud resource-manager folders list --organization=…`",
+        )
+    label = next((n.label for n in chain if n.id == folder_id), "") or gcp.folder_name(folder_id) or folder_id
+
+    runner, region = runners.get(folder_id) or gcp.find_runner(folder_id)
+    if region == "empty":
+        region = "us"
+    if runner:
+        console.print(
+            f"  [green]→[/green] runs from [bold]{runner}[/bold], watches [bold]{label}[/bold] and its sub-folders"
+        )
+    else:
+        console.print(
+            f"  [yellow]→[/yellow] found no project directly inside {label} where you can run jobs and list "
+            "the folder's jobs (roles/bigquery.jobUser + roles/bigquery.resourceViewer)"
+        )
+        runner = ask(
+            console,
+            "     Project directly inside that folder to run bqtop's queries from",
+            hint="BigQuery exposes a folder's jobs only through a project that sits right under it",
+        )
+        region = "us"
+    return runner, folder_id, label, region
+
+
 # ---- main ----------------------------------------------------------------------------------------
 def run(dest: Path | None = None, assume_yes: bool = False) -> int:
     console = Console(highlight=False)
@@ -207,29 +177,25 @@ def run(dest: Path | None = None, assume_yes: bool = False) -> int:
     # 1. what to watch
     scope = choose(console, "1/6  What should bqtop watch?", SCOPES, "folder")
 
-    # 2. billing project (+ folder detection for folder scope)
-    detected = detect_project()
+    # 2. what exactly, and which project runs the queries
+    detected = gcp.default_project()
+    folder_id, folder_label, region_default = "", "", "us"
     if scope == "folder":
-        hint = "bqtop runs its queries here; it watches the folder that directly contains this project"
+        billing, folder_id, folder_label, region_default = pick_folder(console, detected)
     elif scope == "organization":
-        hint = "bqtop runs its queries here; it watches the whole organization"
+        billing = ask(
+            console,
+            "2/6  Project to run bqtop's queries from",
+            default=detected or None,
+            hint="any project in the organization you can run jobs in",
+        )
     else:
-        hint = "bqtop runs its queries here"
-    billing = ask(console, "2/6  Project to run bqtop's queries from", default=detected or None, hint=hint)
-    if scope == "folder":
-        ptype, pid, name = detect_parent(billing)
-        if ptype == "folder":
-            console.print(f"  [green]→[/green] watches folder [bold]{name or pid}[/bold] ({pid}) and its sub-folders")
-        elif ptype == "organization":
-            console.print(
-                "  [yellow]→[/yellow] this project sits directly under the organization; "
-                "use scope 3 (organization) or pick a project inside the folder you want"
-            )
-        elif billing:
-            console.print(
-                "  [dim]→ could not look up the project's folder (gcloud not available or no permission); "
-                "`bqtop --check` will show how many projects are covered[/dim]"
-            )
+        billing = ask(
+            console,
+            "2/6  Project to run bqtop's queries from",
+            default=detected or None,
+            hint="bqtop bills its own small queries here",
+        )
     projects = [billing]
     if scope == "project":
         projects = _list(ask(console, "     Projects to watch, comma separated", default=billing))
@@ -278,6 +244,8 @@ def run(dest: Path | None = None, assume_yes: bool = False) -> int:
     ]
     if source == "information_schema":
         lines.append(f'scope = "{scope}"')
+        if scope == "folder" and folder_id:
+            lines.append(f'folder = "{folder_id}"  # {folder_label}')
         if scope == "project":
             lines.append(f"projects = {_toml_list(projects)}")
     else:

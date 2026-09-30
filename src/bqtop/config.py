@@ -64,6 +64,7 @@ class SourceConfig:
     projects: list[str] = field(default_factory=list)
     table: str = ""
     credentials_file: str = ""  # service-account key; default is Application Default Credentials
+    folder: str = ""  # informational for scope=folder: the folder billing_project sits in; --check verifies it
 
     def __post_init__(self) -> None:
         if not self.regions:

@@ -140,6 +140,22 @@ class Source(ABC):
             out.append(("coverage", ok, detail))
         except Exception as e:
             out.append(("coverage", False, _short(e)))
+        if self.cfg.source.scope == "folder" and self.cfg.source.folder:
+            from bqtop import gcp
+
+            parent = gcp.parent_of_project(self.cfg.source.billing_project)
+            if parent and parent.id != self.cfg.source.folder:
+                out.append(
+                    (
+                        "folder",
+                        False,
+                        f"{self.cfg.source.billing_project} sits in {parent.label}, not in folder "
+                        f"{self.cfg.source.folder}: bqtop watches {parent.label}. Run bqtop from a project "
+                        f"directly inside folder {self.cfg.source.folder}, or fix [source].folder",
+                    )
+                )
+            elif parent:
+                out.append(("folder", True, f"watching {parent.label} and its sub-folders"))
         return out
 
     # ---- helpers -----------------------------------------------------------------------------
