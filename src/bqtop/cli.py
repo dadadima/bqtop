@@ -10,22 +10,7 @@ from pathlib import Path
 
 from bqtop import __version__
 from bqtop.config import Config, ConfigError, load
-
-HINTS = (
-    (
-        "jobs.listAll",
-        "grant roles/bigquery.resourceViewer at that level (project, folder or org), "
-        'or use scope = "user" / kind = "audit_log"',
-    ),
-    ("bigquery.jobs.create", "grant roles/bigquery.jobUser on [source].billing_project"),
-    ("Not found: Table", "check [source].table (audit_log) or [source].projects / regions"),
-    (
-        "could not automatically determine credentials",
-        "run `gcloud auth application-default login` or set GOOGLE_APPLICATION_CREDENTIALS",
-    ),
-    ("Reauthentication", "run `gcloud auth application-default login` again"),
-    ("has not been used in project", "enable the BigQuery API on [source].billing_project"),
-)
+from bqtop.hints import hint_for
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -137,9 +122,7 @@ def _check(cfg: Config, source) -> int:
         print(f"{mark} {what:<8} {detail}")
         if not ok:
             ok_all = False
-            for needle, hint in HINTS:
-                if needle.lower() in detail.lower():
-                    print(f"  → {hint}")
+            print(f"  → {hint_for(detail)}")
     if ok_all:
         print("all good. run `bqtop` for the TUI or `bqtop --once` for a snapshot.")
     return 0 if ok_all else 1

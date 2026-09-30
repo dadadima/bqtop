@@ -94,6 +94,20 @@ def ask(console: Console, question: str, default: str | None = None, hint: str =
         return value
 
 
+def _project_check(value: str) -> str | None:
+    """Validation for project prompts: looks like an id and we can run a BigQuery job there."""
+    import re
+
+    if not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", value):
+        return f"{value!r} is not a project id (ids look like my-project-123; folder names don't work here)"
+    if not gcp.can_run_jobs(value):
+        return (
+            f"cannot run BigQuery jobs in {value!r}: check it is the project *id*, that BigQuery is enabled "
+            "there and that you have roles/bigquery.jobUser on it"
+        )
+    return None
+
+
 def _list(s: str) -> list[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 

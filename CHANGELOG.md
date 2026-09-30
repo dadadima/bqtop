@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4 (2026-09-30)
+
+- The wizard verifies a project before accepting it (looks like an id, BigQuery jobs can run there), so a
+  folder name typed as project is caught with an explanation instead of failing later.
+- Load errors in the TUI open a dialog with the full message and a hint (`e` reopens it) instead of a
+  clipped one-line status; the last good screen stays.
+
 ## 0.3.3 (2026-09-30)
 
 - `--init` for a folder now asks *which folder*, offering the folders above your default project by

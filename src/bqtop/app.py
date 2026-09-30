@@ -15,6 +15,7 @@ from textual.widgets import DataTable, Footer, Header, Input, Sparkline, Static
 
 from bqtop import fmt
 from bqtop.config import Config
+from bqtop.hints import hint_for
 from bqtop.model import Job, Snapshot
 from bqtop.render import SORT_KEYS, cap_cell, err_cell, footer_text, sort_aggs, state_cell, summary_text
 from bqtop.sources.base import Source
@@ -71,6 +72,7 @@ class BqTop(App):
         Binding("escape", "clear_filter", "clear", show=False),
         Binding("p", "toggle_pause", "pause"),
         Binding("question_mark", "help", "help"),
+        Binding("e", "show_error", "error", show=False),
     ]
 
     def __init__(self, cfg: Config, source: Source) -> None:
@@ -92,6 +94,7 @@ class BqTop(App):
         self.paused = False
         self.show_models = False
         self.snap: Snapshot | None = None
+        self.last_error: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -202,7 +205,7 @@ class BqTop(App):
             self.store.refresh(self.window_hours)
             snap = self.store.snapshot(self.window_hours, self.filter)
         except Exception as e:  # keep the last good screen, show the error
-            self.call_from_thread(self._status, Text(f"error: {fmt.one_line(str(e), 300)}", style="bold red"))
+            self.call_from_thread(self._on_error, str(e))
             return
         self.call_from_thread(self._apply, snap)
 
@@ -216,6 +219,17 @@ class BqTop(App):
         self.snap = snap
         self.render_snapshot(snap)
         self._status(footer_text(snap, self.cfg, self.source.describe()))
+
+    def _on_error(self, text: str) -> None:
+        first = self.last_error is None
+        self.last_error = text
+        self._status(Text(f"error: {fmt.one_line(text, 120)}  ·  e for details", style="bold red"))
+        if first and not isinstance(self.screen, ModalScreen):
+            self.push_screen(ErrorScreen(text, self.cfg))
+
+    def action_show_error(self) -> None:
+        if self.last_error and not isinstance(self.screen, ModalScreen):
+            self.push_screen(ErrorScreen(self.last_error, self.cfg))
 
     def _status(self, text: Text) -> None:
         self.query_one("#status", Static).update(text)
@@ -369,6 +383,42 @@ class JobDetail(ModalScreen):
             full = f"{self.job.query}\n\n[could not fetch the full text: {fmt.one_line(str(e), 200)}]"
         if full:
             self.app.call_from_thread(self.query_one("#detail_query", Static).update, Text(full, style="cyan"))
+
+
+class ErrorScreen(ModalScreen):
+    BINDINGS = [
+        Binding("escape", "dismiss", "close"),
+        Binding("q", "dismiss", "close"),
+        Binding("e", "dismiss", "close"),
+    ]
+    DEFAULT_CSS = """
+    ErrorScreen { align: center middle; }
+    #error { width: 100; height: auto; max-height: 80%; border: thick $error; background: $surface; padding: 1 2; }
+    """
+
+    def __init__(self, text: str, cfg: Config | None = None) -> None:
+        super().__init__()
+        self.text = text
+        self.cfg = cfg
+
+    def compose(self) -> ComposeResult:
+        body = Text()
+        body.append("bqtop could not load data\n\n", style="bold red")
+        body.append(" ".join(self.text.split()) + "\n\n")
+        body.append("→ " + hint_for(self.text) + "\n", style="bold")
+        if self.cfg:
+            body.append(
+                f"\nconfig: {self.cfg.path or '(demo)'}  ·  billing project: {self.cfg.source.billing_project}"
+                f"  ·  source: {self.cfg.source.kind} / {self.cfg.source.scope}\n",
+                style="dim",
+            )
+        body.append(
+            "\nbqtop --check diagnoses credentials, permissions and the source. "
+            "The last good screen stays; r retries; esc closes.",
+            style="dim",
+        )
+        with VerticalScroll(id="error"):
+            yield Static(body)
 
 
 class HelpScreen(ModalScreen):
