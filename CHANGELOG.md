@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5 (2026-09-30)
+
+- The project validation announced in 0.3.4 was not wired into the prompts; it is now, on every project
+  answer including the projects-to-watch list.
+
 ## 0.3.4 (2026-09-30)
 
 - The wizard verifies a project before accepting it (looks like an id, BigQuery jobs can run there), so a
