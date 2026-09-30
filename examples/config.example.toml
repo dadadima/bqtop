@@ -1,0 +1,40 @@
+# bqtop configuration. Copy to ~/.config/bqtop/config.toml (or ./bqtop.toml).
+
+[source]
+# information_schema: real-time, includes RUNNING jobs, reads INFORMATION_SCHEMA.JOBS_BY_*.
+# audit_log:          reads a BigQuery audit-log sink table (cloudaudit_googleapis_com_data_access);
+#                     completed jobs only, but works across projects without jobs.listAll everywhere.
+kind = "information_schema"
+
+# Project that runs bqtop's own queries (and pays for them).
+billing_project = "my-admin-project"
+
+# BigQuery region of the INFORMATION_SCHEMA views ("us", "eu", "europe-west1", ...).
+region = "us"
+
+# information_schema only. project | folder | organization | user
+#   project      -> JOBS_BY_PROJECT for each entry in `projects` (needs bigquery.jobs.listAll per project)
+#   folder       -> JOBS_BY_FOLDER of billing_project's parent folder (needs jobs.listAll on the folder)
+#   organization -> JOBS_BY_ORGANIZATION (needs jobs.listAll on the org)
+#   user         -> JOBS_BY_USER, your own jobs only, no extra permissions
+scope = "project"
+projects = ["my-admin-project", "my-data-project"]
+
+# audit_log only: the routed data-access table.
+# table = "my-admin-project.bq_audit_logs.cloudaudit_googleapis_com_data_access"
+
+[pricing]
+# On-demand analysis price used for the cost estimate.
+on_demand_usd_per_tib = 6.25
+
+[quotas]
+# Optional daily QueryUsagePerDay caps per project. Shown as % used today.
+# "my-data-project" = "10 TiB"
+# "my-agents-project" = "5 TiB"
+
+[ui]
+refresh_seconds = 60
+window_hours = 24
+timezone = "UTC"
+top_n = 15
+stream_rows = 40
