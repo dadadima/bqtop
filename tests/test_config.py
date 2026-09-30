@@ -79,3 +79,10 @@ def test_credentials_file(tmp_path: Path):
     p.write_text('[source]\nbilling_project = "p"\ncredentials_file = "/nope/key.json"\n')
     with pytest.raises(ConfigError):
         load(p)
+
+
+def test_bad_timezone_is_a_config_error(tmp_path: Path):
+    p = tmp_path / "bqtop.toml"
+    p.write_text('[source]\nbilling_project = "p"\n[ui]\ntimezone = "today"\n')
+    with pytest.raises(ConfigError, match="timezone"):
+        load(p)

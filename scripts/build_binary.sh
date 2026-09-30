@@ -11,7 +11,7 @@ NAME="bqtop-${VERSION}-${OS}-${ARCH}"
 
 rm -rf build dist
 uv run --with pyinstaller pyinstaller --noconfirm --clean --onefile --name bqtop \
-  --collect-all textual --collect-all bqtop \
+  --collect-all textual --collect-all bqtop --collect-data tzdata \
   --copy-metadata google-cloud-bigquery --copy-metadata google-api-core --copy-metadata google-auth \
   --copy-metadata google-cloud-core --copy-metadata google-resumable-media --copy-metadata textual --copy-metadata rich \
   --hidden-import bqtop.app --hidden-import bqtop.wizard --hidden-import bqtop.sources.demo \

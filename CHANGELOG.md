@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2 (2026-09-30)
+
+- `--init` redone after first-user feedback: what-to-watch comes first, numbered choices that also
+  accept loose spellings (`on-demand`), one line per question, timezone and numbers validated, the
+  watched folder is detected and shown, existing config asks before overwriting, check runs at the end.
+- Ctrl-C aborts cleanly; config mistakes (e.g. an invalid timezone) and unexpected errors print one line
+  instead of a traceback (`--debug` for the trace). `tzdata` bundled so the binary finds zones everywhere.
+
 ## 0.3.1 (2026-09-30)
 
 - `[source].credentials_file`: run bqtop as a service account instead of Application Default

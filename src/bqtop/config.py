@@ -5,6 +5,7 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from bqtop.pricing import Pricing
 
@@ -139,6 +140,17 @@ def _parse(p: Path) -> Config:
             raise ConfigError(f"[source].scope must be one of {SCOPES}, got {src.scope!r}")
         if src.scope == "project" and not src.projects:
             src.projects = [src.billing_project]
+    try:
+        ZoneInfo(ui.timezone)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ConfigError(
+            f"{p}: [ui].timezone {ui.timezone!r} is not a timezone. Use an IANA name such as "
+            f'"Europe/Brussels" or "UTC", or run `bqtop --init` again.'
+        ) from e
+    if ui.refresh_seconds < 5:
+        raise ConfigError(f"{p}: [ui].refresh_seconds must be at least 5")
+    if ui.window_hours <= 0:
+        raise ConfigError(f"{p}: [ui].window_hours must be positive")
     if ui.max_window_hours < ui.window_hours:
         ui.max_window_hours = ui.window_hours
     return Config(source=src, ui=ui, pricing=pricing, quotas=quotas, budgets=budgets, path=p)

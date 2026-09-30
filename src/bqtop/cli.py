@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import asdict, is_dataclass
@@ -28,6 +29,20 @@ HINTS = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print("\nbqtop: aborted", file=sys.stderr)
+        return 130
+    except Exception as e:  # one readable line instead of a stack trace; --debug or BQTOP_DEBUG=1 for the trace
+        if "--debug" in (argv or sys.argv) or os.environ.get("BQTOP_DEBUG"):
+            raise
+        print(f"bqtop: {' '.join(str(e).split())[:400]}", file=sys.stderr)
+        print("bqtop: run with --debug for the full traceback", file=sys.stderr)
+        return 1
+
+
+def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bqtop", description="htop for BigQuery: jobs, principals, projects, cost.")
     ap.add_argument("-c", "--config", help="config file (default: ./bqtop.toml, then ~/.config/bqtop/config.toml)")
     ap.add_argument("-w", "--window", type=float, help="window in hours (overrides config)")
@@ -41,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--demo", action="store_true", help="run on synthetic data, no GCP needed")
     ap.add_argument("--check", action="store_true", help="check credentials, permissions and the source, then exit")
     ap.add_argument("--init", action="store_true", help="interactive setup, writes ~/.config/bqtop/config.toml")
-    ap.add_argument("-y", "--yes", action="store_true", help="with --init: skip questions, write the example config")
+    ap.add_argument("-y", "--yes", action="store_true", help="with --init: no questions, write the example config")
+    ap.add_argument("--debug", action="store_true", help="show full tracebacks")
     ap.add_argument("--version", action="version", version=f"bqtop {__version__}")
     args = ap.parse_args(argv)
 
