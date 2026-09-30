@@ -6,11 +6,23 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from bqtop.pricing import Pricing
+
 _UNITS = {
     "b": 1,
-    "kb": 10**3, "mb": 10**6, "gb": 10**9, "tb": 10**12, "pb": 10**15,
-    "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40, "pib": 2**50,
+    "kb": 10**3,
+    "mb": 10**6,
+    "gb": 10**9,
+    "tb": 10**12,
+    "pb": 10**15,
+    "kib": 2**10,
+    "mib": 2**20,
+    "gib": 2**30,
+    "tib": 2**40,
+    "pib": 2**50,
 }
+KINDS = ("information_schema", "audit_log", "demo")
+SCOPES = ("project", "folder", "organization", "user")
 
 
 def default_config_path() -> Path:
@@ -31,14 +43,29 @@ def parse_size(value: int | float | str) -> int:
     return int(float(m.group(1)) * _UNITS[unit])
 
 
+def parse_money(value: int | float | str) -> float:
+    """'$50' / '50 usd' / 50 -> 50.0 (per day)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    m = re.fullmatch(r"\s*\$?\s*([\d.]+)\s*(usd|/day|per day)?\s*", str(value), re.I)
+    if not m:
+        raise ValueError(f"bad amount: {value!r}")
+    return float(m.group(1))
+
+
 @dataclass
 class SourceConfig:
     kind: str = "information_schema"
     billing_project: str = ""
     region: str = "us"
+    regions: list[str] = field(default_factory=list)
     scope: str = "project"
     projects: list[str] = field(default_factory=list)
     table: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.regions:
+            self.regions = [self.region]
 
 
 @dataclass
@@ -48,15 +75,26 @@ class UIConfig:
     timezone: str = "UTC"
     top_n: int = 15
     stream_rows: int = 40
+    max_window_hours: float = 168
+    timeline_buckets: int = 48
 
 
 @dataclass
 class Config:
     source: SourceConfig
     ui: UIConfig
-    price_per_tib: float = 6.25
-    quotas: dict[str, int] = field(default_factory=dict)
+    pricing: Pricing = field(default_factory=Pricing)
+    quotas: dict[str, int] = field(default_factory=dict)  # project -> bytes per day
+    budgets: dict[str, float] = field(default_factory=dict)  # principal or project -> USD per day
     path: Path | None = None
+
+    @classmethod
+    def demo(cls) -> Config:
+        cfg = cls(source=SourceConfig(kind="demo", billing_project="demo"), ui=UIConfig(refresh_seconds=5))
+        cfg.quotas = {"acme-agents-prod": parse_size("2 TiB"), "acme-anl-dev": parse_size("1 TiB")}
+        cfg.budgets = {"svc-agent-reader@acme-agents-prod.iam.gserviceaccount.com": 5.0, "acme-std-prod": 40.0}
+        cfg.pricing.projects["acme-std-prod"] = type(cfg.pricing.default)(mode="auto", slot_usd_per_hour=0.04)
+        return cfg
 
 
 class ConfigError(Exception):
@@ -70,26 +108,32 @@ def load(path: str | os.PathLike | None = None) -> Config:
             return _parse(p)
     raise ConfigError(
         "no config found (looked at: " + ", ".join(str(c) for c in candidates) + "). "
-        "Run `bqtop --init` to write a starter config."
+        "Run `bqtop --init` to write a starter config, or `bqtop --demo` to look around first."
     )
 
 
 def _parse(p: Path) -> Config:
-    raw = tomllib.loads(p.read_text())
-    src = SourceConfig(**raw.get("source", {}))
-    ui = UIConfig(**raw.get("ui", {}))
-    price = float(raw.get("pricing", {}).get("on_demand_usd_per_tib", 6.25))
-    quotas = {k: parse_size(v) for k, v in raw.get("quotas", {}).items()}
+    try:
+        raw = tomllib.loads(p.read_text())
+        src = SourceConfig(**raw.get("source", {}))
+        ui = UIConfig(**raw.get("ui", {}))
+        pricing = Pricing.from_toml(raw.get("pricing", {}))
+        quotas = {k: parse_size(v) for k, v in raw.get("quotas", {}).items()}
+        budgets = {k: parse_money(v) for k, v in raw.get("budgets", {}).items()}
+    except (TypeError, ValueError, tomllib.TOMLDecodeError) as e:
+        raise ConfigError(f"{p}: {e}") from e
 
-    if not src.billing_project:
+    if src.kind not in KINDS:
+        raise ConfigError(f"[source].kind must be one of {KINDS}, got {src.kind!r}")
+    if src.kind != "demo" and not src.billing_project:
         raise ConfigError("[source].billing_project is required")
-    if src.kind not in ("information_schema", "audit_log"):
-        raise ConfigError(f"[source].kind must be information_schema or audit_log, got {src.kind!r}")
     if src.kind == "audit_log" and not src.table:
         raise ConfigError("[source].table is required for kind = audit_log")
     if src.kind == "information_schema":
-        if src.scope not in ("project", "folder", "organization", "user"):
-            raise ConfigError(f"[source].scope must be project|folder|organization|user, got {src.scope!r}")
+        if src.scope not in SCOPES:
+            raise ConfigError(f"[source].scope must be one of {SCOPES}, got {src.scope!r}")
         if src.scope == "project" and not src.projects:
             src.projects = [src.billing_project]
-    return Config(source=src, ui=ui, price_per_tib=price, quotas=quotas, path=p)
+    if ui.max_window_hours < ui.window_hours:
+        ui.max_window_hours = ui.window_hours
+    return Config(source=src, ui=ui, pricing=pricing, quotas=quotas, budgets=budgets, path=p)

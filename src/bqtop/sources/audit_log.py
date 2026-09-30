@@ -1,10 +1,15 @@
-"""BigQuery audit-log export source: a `cloudaudit_googleapis_com_data_access` table filled by a
-Cloud Logging sink (project-, folder- or org-level). Completed jobs only (the DONE jobChange event).
-Permissions: bigquery.dataViewer on the sink table plus jobUser on the billing project."""
+"""BigQuery audit-log export: a `cloudaudit_googleapis_com_data_access` table filled by a Cloud Logging
+sink (project, folder or org level). Sees completed jobs only (the DONE jobChange event), so there is
+no RUNNING state. Permissions: dataViewer on the sink table, jobUser on the billing project.
+
+Note: the sink table is day-partitioned, so an incremental fetch still scans the current day's
+partition. Cost per refresh grows with the day's volume; 120 s refresh is a sensible default here."""
 
 from __future__ import annotations
 
-from bqtop.sources.base import Source
+from bqtop.sources.base import QUERY_SNIPPET_CHARS, Source
+
+_TABLE_RE = r"^projects/([^/]+)/datasets/([^/]+)/tables/([^/]+)$"
 
 _SQL = """
 select
@@ -22,34 +27,47 @@ select
     cast(json_value(m, '$.jobChange.job.jobStats.totalSlotMs') as int64) as slot_ms,
     cast(json_value(m, '$.jobChange.job.jobStats.queryStats.cacheHit') as bool) as cache_hit,
     json_value(m, '$.jobChange.job.jobStatus.errorResult.code') as error_code,
-    json_value(m, '$.jobChange.job.jobStatus.errorResult.message') as error_message,
-    json_value(m, '$.jobChange.job.jobConfig.queryConfig.query') as query,
+    substr(json_value(m, '$.jobChange.job.jobStatus.errorResult.message'), 1, 300) as error_message,
+    substr(json_value(m, '$.jobChange.job.jobConfig.queryConfig.query'), 1, {snippet}) as query,
     array(
-        select regexp_replace(x, r'^projects/([^/]+)/datasets/([^/]+)/tables/([^/]+)$', r'\\1.\\2.\\3')
+        select regexp_replace(x, r'{table_re}', r'\\1.\\2.\\3')
         from unnest(json_value_array(m, '$.jobChange.job.jobStats.queryStats.referencedTables')) as x
     ) as referenced_tables,
-    regexp_replace(
-        json_value(m, '$.jobChange.job.jobConfig.queryConfig.destinationTable'),
-        r'^projects/([^/]+)/datasets/([^/]+)/tables/([^/]+)$', r'\\1.\\2.\\3'
-    ) as destination_table
+    regexp_replace(json_value(m, '$.jobChange.job.jobConfig.queryConfig.destinationTable'),
+                   r'{table_re}', r'\\1.\\2.\\3') as destination_table,
+    json_value(m, '$.jobChange.job.jobStats.reservationUsage[0].name') as reservation_id
 from (
     select timestamp, resource, protopayload_auditlog, protopayload_auditlog.metadatajson as m
     from `{table}`
-    where timestamp >= @window_start
-      and json_value(protopayload_auditlog.metadatajson, '$.jobChange.job.jobStatus.jobState') = 'DONE'
+    {{where}}
 )
 where json_value(m, '$.jobChange.job.jobConfig.queryConfig.statementType') is null
    or json_value(m, '$.jobChange.job.jobConfig.queryConfig.statementType') != 'SCRIPT'
 """
 
+_QUERY_SQL = """
+select json_value(protopayload_auditlog.metadatajson, '$.jobChange.job.jobConfig.queryConfig.query') as query
+from `{table}`
+where timestamp >= timestamp_sub(current_timestamp(), interval 8 day)
+  and resource.labels.project_id = @project_id
+  and json_value(protopayload_auditlog.metadatajson, '$.jobChange.job.jobName') like concat('%/jobs/', @job_id)
+  and json_value(protopayload_auditlog.metadatajson, '$.jobChange.job.jobStatus.jobState') = 'DONE'
+limit 1
+"""
+
 
 class AuditLogSource(Source):
+    has_running_jobs = False
+
     def base_sql(self) -> str:
-        return _SQL.format(table=self.cfg.source.table)
+        return _SQL.format(table=self.cfg.source.table, snippet=QUERY_SNIPPET_CHARS, table_re=_TABLE_RE)
+
+    def time_where(self) -> str:
+        return """where timestamp >= @since and timestamp < @until
+      and json_value(protopayload_auditlog.metadatajson, '$.jobChange.job.jobStatus.jobState') = 'DONE'"""
+
+    def query_sql(self) -> str | None:
+        return _QUERY_SQL.format(table=self.cfg.source.table)
 
     def describe(self) -> str:
         return f"audit log {self.cfg.source.table}"
-
-    @property
-    def has_running_jobs(self) -> bool:
-        return False

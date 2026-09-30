@@ -7,6 +7,10 @@ from bqtop.sources.information_schema import InformationSchemaSource
 
 
 def make_source(cfg: Config) -> Source:
+    if cfg.source.kind == "demo":
+        from bqtop.sources.demo import DemoSource
+
+        return DemoSource(cfg)
     if cfg.source.kind == "audit_log":
         return AuditLogSource(cfg)
     return InformationSchemaSource(cfg)

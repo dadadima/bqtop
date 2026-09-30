@@ -1,6 +1,6 @@
 [project]
 name = "bqtop"
-version = "0.1.0"
+version = "0.2.0"
 description = "htop for BigQuery: live jobs, principals, projects, hot tables and cost in your terminal"
 readme = "README.md"
 license = "MIT"
@@ -12,6 +12,9 @@ dependencies = [
     "textual>=0.80",
     "rich>=13",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/dadadima/bqtop"
@@ -27,5 +30,14 @@ build-backend = "hatchling.build"
 packages = ["src/bqtop"]
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/bqtop/sources/demo.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

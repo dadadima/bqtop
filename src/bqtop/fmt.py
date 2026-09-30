@@ -66,3 +66,34 @@ def one_line(text: str | None, width: int) -> str:
 def short_principal(p: str) -> str:
     """svc-airflow-prod@cdo-de-ingest-prod.iam.gserviceaccount.com -> svc-airflow-prod@cdo-de-ingest-prod"""
     return p.replace(".iam.gserviceaccount.com", "") if p else "-"
+
+
+def stmt(job) -> str:
+    """Short job kind: select, ctas, merge, load, copy, extract..."""
+    st = (job.statement_type or job.job_type or "-").lower()
+    return {
+        "create_table_as_select": "ctas",
+        "insert": "insert",
+        "select": "select",
+        "merge": "merge",
+        "delete": "delete",
+        "update": "update",
+        "truncate_table": "truncate",
+        "drop_table": "drop",
+        "create_view": "view",
+        "create_table": "create",
+        "alter_table": "alter",
+        "script": "script",
+        "query": "query",
+        "load": "load",
+        "copy": "copy",
+        "extract": "extract",
+    }.get(st, st)
+
+
+def when(dt: datetime | None, tz: ZoneInfo) -> str:
+    """HH:MM:SS if today, else MM-DD HH:MM."""
+    if dt is None:
+        return "-"
+    local = dt.astimezone(tz)
+    return local.strftime("%H:%M:%S") if local.date() == datetime.now(tz).date() else local.strftime("%m-%d %H:%M")

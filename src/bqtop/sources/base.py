@@ -1,74 +1,37 @@
-"""Shared fetch logic. A source only has to provide `base_sql()`: a SELECT that yields one row per
-job with the normalized columns below. Everything else (aggregation, the stream, concurrency) is
-common.
+"""A source turns BigQuery job metadata into normalized `Job` rows. Two methods matter:
+
+  fetch_jobs(since, until, pending_ids) -> (jobs, bytes_billed)
+      jobs created in [since, until) plus any job whose id is in `pending_ids` (to pick up state
+      changes of jobs that were still running), and what the fetch itself billed.
+  fetch_query(project_id, job_id) -> full query text, or None if the source cannot provide it.
+
+Concrete sources implement `base_sql()` returning a SELECT with the normalized columns and a `{where}`
+placeholder; the base class does parameters, execution and row mapping.
 
 Normalized columns:
   creation_time TIMESTAMP, project_id STRING, principal STRING, job_id STRING, job_type STRING,
   statement_type STRING, state STRING, start_time TIMESTAMP, end_time TIMESTAMP,
-  bytes_processed INT64, bytes_billed INT64, slot_ms INT64, cache_hit BOOL,
-  error_code STRING, error_message STRING, query STRING,
-  referenced_tables ARRAY<STRING>, destination_table STRING
+  bytes_processed INT64, bytes_billed INT64, slot_ms INT64, cache_hit BOOL, error_code STRING,
+  error_message STRING, query STRING, referenced_tables ARRAY<STRING>, destination_table STRING,
+  reservation_id STRING
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 from google.cloud import bigquery
 
 from bqtop.config import Config
-from bqtop.model import Agg, Job, Snapshot
+from bqtop.model import Job
 
-# One script job: the base scan lands in a temp table once, the three aggregations read that.
-_SCRIPT_SQL = """
-create temp table jobs as
-{base};
-
--- agg
-select grp, key,
-    countif(creation_time >= @win) as jobs,
-    countif(creation_time >= @win and state = 'RUNNING') as running,
-    countif(creation_time >= @win and error_code is not null) as errors,
-    sum(if(creation_time >= @win, coalesce(bytes_processed, 0), 0)) as bytes_processed,
-    sum(if(creation_time >= @win, coalesce(bytes_billed, 0), 0)) as bytes_billed,
-    sum(if(creation_time >= @win, coalesce(slot_ms, 0), 0)) as slot_ms,
-    sum(if(creation_time >= @day_start, coalesce(bytes_billed, 0), 0)) as bytes_billed_today
-from jobs
-cross join unnest([
-    struct('principal' as grp, coalesce(principal, '(unknown)') as key),
-    struct('project' as grp, coalesce(project_id, '(unknown)') as key)
-]) as g
-group by grp, key
-having jobs > 0 or bytes_billed_today > 0;
-
--- tables
-select t as key,
-    count(*) as jobs,
-    countif(error_code is not null) as errors,
-    sum(coalesce(bytes_processed, 0)) as bytes_processed,
-    sum(coalesce(bytes_billed, 0)) as bytes_billed,
-    sum(coalesce(slot_ms, 0)) as slot_ms,
-    count(distinct principal) as principals
-from jobs, unnest(referenced_tables) as t
-where creation_time >= @win
-group by t
-order by bytes_billed desc, jobs desc
-limit {top_n};
-
--- stream
-select * except (referenced_tables, query),
-    substr(query, 1, 400) as query,
-    array_length(referenced_tables) as n_tables
-from jobs
-where creation_time >= @win
-order by (state = 'RUNNING') desc, creation_time desc
-limit {stream_rows};
-"""
+QUERY_SNIPPET_CHARS = 300
 
 
 class Source(ABC):
+    has_running_jobs = True  # False when the source only sees finished jobs
+
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self._client: bigquery.Client | None = None
@@ -81,80 +44,105 @@ class Source(ABC):
 
     @abstractmethod
     def base_sql(self) -> str:
-        """SELECT producing the normalized job rows, filtered on `creation_time >= @window_start`."""
+        """SELECT of normalized columns with a `{where}` placeholder (no trailing semicolon)."""
+
+    @abstractmethod
+    def time_where(self) -> str:
+        """WHERE clause using @since, @until, @floor, @pending (ARRAY<STRING>) parameters."""
 
     @abstractmethod
     def describe(self) -> str:
         """One-line description for the header."""
 
-    @property
-    def has_running_jobs(self) -> bool:
-        return True
+    def query_sql(self) -> str | None:
+        """SELECT query FROM ... WHERE project/job match (@project_id, @job_id), or None."""
+        return None
 
-    def fetch(self, window_hours: float | None = None) -> Snapshot:
-        ui = self.cfg.ui
-        window_hours = window_hours or ui.window_hours
-        tz = ZoneInfo(ui.timezone)
-        now = datetime.now(tz=timezone.utc)
-        window_start = now - timedelta(hours=window_hours)
-        local_midnight = now.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        day_start = local_midnight.astimezone(timezone.utc)
-        # the day rollup needs data since midnight even when the window is shorter than that
-        base_start = min(window_start, day_start)
-
+    # ---- public API ------------------------------------------------------------------------------
+    def fetch_jobs(self, since: datetime, until: datetime, pending_ids: list[str]) -> tuple[list[Job], int]:
+        sql = self.base_sql().format(where=self.time_where())
         params = [
-            bigquery.ScalarQueryParameter("window_start", "TIMESTAMP", base_start),
-            bigquery.ScalarQueryParameter("day_start", "TIMESTAMP", day_start),
-            bigquery.ScalarQueryParameter("win", "TIMESTAMP", window_start),
+            bigquery.ScalarQueryParameter("since", "TIMESTAMP", since),
+            bigquery.ScalarQueryParameter("until", "TIMESTAMP", until),
+            # pending jobs are at most max_hours old; a floor keeps partition pruning effective
+            bigquery.ScalarQueryParameter("floor", "TIMESTAMP", since if not pending_ids else _floor(since)),
+            bigquery.ArrayQueryParameter("pending", "STRING", pending_ids[:5000]),
         ]
-        sql = _SCRIPT_SQL.format(base=self.base_sql(), top_n=int(ui.top_n), stream_rows=int(ui.stream_rows))
-        results, billed = self._run_script(sql, params)
+        job = self.client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
+        rows = [self._to_job(r) for r in job.result()]
+        return rows, job.total_bytes_billed or 0
 
-        snap = Snapshot(fetched_at=now, window_hours=window_hours)
-        snap.query_bytes_billed = billed
+    def fetch_query(self, project_id: str, job_id: str) -> str | None:
+        sql = self.query_sql()
+        if sql is None:
+            return None
+        params = [
+            bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+            bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+        ]
+        rows = list(self.client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+        return rows[0]["query"] if rows else None
 
-        for r in results["agg"]:
-            a = Agg(
-                key=r["key"], jobs=r["jobs"], running=r["running"], errors=r["errors"],
-                bytes_processed=r["bytes_processed"], bytes_billed=r["bytes_billed"],
-                slot_ms=r["slot_ms"], bytes_billed_today=r["bytes_billed_today"],
+    def probe(self) -> list[tuple[str, bool, str]]:
+        """Connectivity checks for `bqtop --check`: (what, ok, detail)."""
+        out = []
+        try:
+            who = list(self.client.query("select session_user() as who").result())[0]["who"]
+            out.append(("identity", True, f"{who} (jobs run in {self.cfg.source.billing_project})"))
+        except Exception as e:
+            out.append(("identity", False, _short(e)))
+            return out
+        try:
+            sql = self.base_sql().format(where=self.time_where())
+            cfg = bigquery.QueryJobConfig(
+                dry_run=True,
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("since", "TIMESTAMP", datetime.now().astimezone() - _DAY),
+                    bigquery.ScalarQueryParameter("until", "TIMESTAMP", datetime.now().astimezone()),
+                    bigquery.ScalarQueryParameter("floor", "TIMESTAMP", datetime.now().astimezone() - _DAY),
+                    bigquery.ArrayQueryParameter("pending", "STRING", []),
+                ],
             )
-            (snap.by_principal if r["grp"] == "principal" else snap.by_project).append(a)
+            j = self.client.query(sql, job_config=cfg)
+            out.append(
+                ("source", True, f"{self.describe()} · a 24h backfill scans ~{j.total_bytes_processed / 2**20:.0f} MiB")
+            )
+        except Exception as e:
+            out.append(("source", False, _short(e)))
+        return out
 
-        for r in results["tables"]:
-            snap.by_table.append(Agg(
-                key=r["key"], jobs=r["jobs"], errors=r["errors"], bytes_processed=r["bytes_processed"],
-                bytes_billed=r["bytes_billed"], slot_ms=r["slot_ms"], principals=r["principals"],
-            ))
+    # ---- helpers -----------------------------------------------------------------------------
+    @staticmethod
+    def _to_job(r) -> Job:
+        return Job(
+            creation_time=r["creation_time"],
+            project_id=r["project_id"] or "(unknown)",
+            principal=r["principal"] or "(unknown)",
+            job_id=r["job_id"] or "-",
+            state=r["state"] or "DONE",
+            job_type=r["job_type"],
+            statement_type=r["statement_type"],
+            start_time=r["start_time"],
+            end_time=r["end_time"],
+            bytes_processed=r["bytes_processed"] or 0,
+            bytes_billed=r["bytes_billed"] or 0,
+            slot_ms=r["slot_ms"] or 0,
+            cache_hit=r["cache_hit"],
+            error_code=r["error_code"],
+            error_message=r["error_message"],
+            query=r["query"],
+            destination_table=r["destination_table"],
+            referenced_tables=list(r["referenced_tables"] or []),
+            reservation_id=r["reservation_id"],
+        )
 
-        for r in results["stream"]:
-            snap.jobs.append(Job(
-                creation_time=r["creation_time"], project_id=r["project_id"] or "-",
-                principal=r["principal"] or "-", job_id=r["job_id"] or "-", state=r["state"] or "-",
-                job_type=r["job_type"], statement_type=r["statement_type"],
-                start_time=r["start_time"], end_time=r["end_time"],
-                bytes_processed=r["bytes_processed"] or 0, bytes_billed=r["bytes_billed"] or 0,
-                slot_ms=r["slot_ms"] or 0, cache_hit=r["cache_hit"], error_code=r["error_code"],
-                error_message=r["error_message"], query=r["query"],
-                destination_table=r["destination_table"], n_tables=r["n_tables"] or 0,
-            ))
 
-        snap.by_principal.sort(key=lambda a: (a.bytes_billed, a.jobs), reverse=True)
-        snap.by_project.sort(key=lambda a: (a.bytes_billed, a.jobs), reverse=True)
-        return snap
+_DAY = timedelta(hours=24)
 
-    def _run_script(self, sql: str, params: list) -> tuple[dict[str, list[dict]], int]:
-        """Run the multi-statement script and collect the three result sets from its child jobs.
-        Children are matched by result schema, not by order."""
-        parent = self.client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
-        parent.result()
-        out: dict[str, list[dict]] = {"agg": [], "tables": [], "stream": []}
-        billed = 0
-        for child in self.client.list_jobs(parent_job=parent.job_id):
-            billed += child.total_bytes_billed or 0
-            if child.statement_type != "SELECT":
-                continue
-            names = {f.name for f in child.result().schema}
-            key = "agg" if "grp" in names else "tables" if "principals" in names else "stream"
-            out[key] = [dict(r.items()) for r in child.result()]
-        return out, billed
+
+def _floor(since: datetime) -> datetime:
+    return since - timedelta(hours=48)
+
+
+def _short(e: Exception) -> str:
+    return " ".join(str(e).split())[:300]

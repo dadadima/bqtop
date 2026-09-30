@@ -1,9 +1,16 @@
-"""INFORMATION_SCHEMA.JOBS_BY_{PROJECT,FOLDER,ORGANIZATION,USER} source. Real time, includes RUNNING
-jobs. Permissions: bigquery.jobs.listAll at the matching level (none for `user`)."""
+"""INFORMATION_SCHEMA.JOBS_BY_{PROJECT,FOLDER,ORGANIZATION,USER}. Real time, includes RUNNING jobs.
+Permissions: bigquery.jobs.listAll at the matching level (roles/bigquery.resourceViewer); none for `user`."""
 
 from __future__ import annotations
 
-from bqtop.sources.base import Source
+from bqtop.sources.base import QUERY_SNIPPET_CHARS, Source
+
+_VIEW = {
+    "project": "JOBS_BY_PROJECT",
+    "folder": "JOBS_BY_FOLDER",
+    "organization": "JOBS_BY_ORGANIZATION",
+    "user": "JOBS_BY_USER",
+}
 
 _COLS = """
     creation_time,
@@ -20,7 +27,7 @@ _COLS = """
     total_slot_ms as slot_ms,
     cache_hit,
     error_result.reason as error_code,
-    error_result.message as error_message,
+    substr(error_result.message, 1, 300) as error_message,
     {query_col} as query,
     array(
         select concat(t.project_id, '.', t.dataset_id, '.', t.table_id)
@@ -28,34 +35,45 @@ _COLS = """
     ) as referenced_tables,
     if(destination_table.table_id is null, null,
        concat(destination_table.project_id, '.', destination_table.dataset_id, '.', destination_table.table_id)
-    ) as destination_table
-"""
-
-# SCRIPT parent jobs re-report their children's bytes; skip them to avoid double counting.
-_WHERE = """
-where creation_time >= @window_start
-  and (statement_type is null or statement_type != 'SCRIPT')
+    ) as destination_table,
+    reservation_id
 """
 
 
 class InformationSchemaSource(Source):
-    def _view(self, project: str) -> str:
-        scope = self.cfg.source.scope
-        name = {"project": "JOBS_BY_PROJECT", "folder": "JOBS_BY_FOLDER",
-                "organization": "JOBS_BY_ORGANIZATION", "user": "JOBS_BY_USER"}[scope]
-        return f"`{project}`.`region-{self.cfg.source.region}`.INFORMATION_SCHEMA.{name}"
+    def _views(self) -> list[str]:
+        src = self.cfg.source
+        name = _VIEW[src.scope]
+        projects = src.projects if src.scope == "project" else [src.billing_project]
+        return [f"`{p}`.`region-{r}`.INFORMATION_SCHEMA.{name}" for p in projects for r in src.regions]
+
+    def _has_query_text(self) -> bool:
+        return self.cfg.source.scope in ("project", "user")
 
     def base_sql(self) -> str:
-        src = self.cfg.source
-        # query text only exists in the project- and user-level views
-        query_col = "query" if src.scope in ("project", "user") else "cast(null as string)"
+        query_col = f"substr(query, 1, {QUERY_SNIPPET_CHARS})" if self._has_query_text() else "cast(null as string)"
         cols = _COLS.format(query_col=query_col)
-        projects = src.projects if src.scope == "project" else [src.billing_project]
-        selects = [f"select {cols} from {self._view(p)} {_WHERE}" for p in projects]
-        return "\nunion all\n".join(selects)
+        return "\nunion all\n".join(f"select {cols} from {v}\n{{where}}" for v in self._views())
+
+    def time_where(self) -> str:
+        # SCRIPT parents re-report their children's bytes; skip them to avoid double counting.
+        return """where creation_time >= @floor
+  and ((creation_time >= @since and creation_time < @until) or job_id in unnest(@pending))
+  and (statement_type is null or statement_type != 'SCRIPT')"""
+
+    def query_sql(self) -> str | None:
+        if not self._has_query_text():
+            return None
+        return (
+            "\nunion all\n".join(
+                f"select query from {v} where project_id = @project_id and job_id = @job_id" for v in self._views()
+            )
+            + "\nlimit 1"
+        )
 
     def describe(self) -> str:
         src = self.cfg.source
+        regions = ",".join(src.regions)
         if src.scope == "project":
-            return f"INFORMATION_SCHEMA.JOBS_BY_PROJECT x{len(src.projects)} ({src.region})"
-        return f"INFORMATION_SCHEMA.JOBS_BY_{src.scope.upper()} via {src.billing_project} ({src.region})"
+            return f"INFORMATION_SCHEMA.JOBS_BY_PROJECT × {len(src.projects)} ({regions})"
+        return f"INFORMATION_SCHEMA.JOBS_BY_{src.scope.upper()} via {src.billing_project} ({regions})"

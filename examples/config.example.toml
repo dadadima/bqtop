@@ -1,22 +1,24 @@
-# bqtop configuration. Copy to ~/.config/bqtop/config.toml (or ./bqtop.toml).
+# bqtop configuration. Copy to ~/.config/bqtop/config.toml (or ./bqtop.toml in the current dir).
+# Try `bqtop --demo` first if you just want to see what it looks like.
 
 [source]
-# information_schema: real-time, includes RUNNING jobs, reads INFORMATION_SCHEMA.JOBS_BY_*.
+# information_schema: real time, includes RUNNING jobs, reads INFORMATION_SCHEMA.JOBS_BY_* (default).
 # audit_log:          reads a BigQuery audit-log sink table (cloudaudit_googleapis_com_data_access);
-#                     completed jobs only, but works across projects without jobs.listAll everywhere.
+#                     completed jobs only, works across projects without jobs.listAll on each.
 kind = "information_schema"
 
-# Project that runs bqtop's own queries (and pays for them).
+# Project that runs bqtop's own queries (and pays for them: ~10 MiB per refresh on INFORMATION_SCHEMA).
 billing_project = "my-admin-project"
 
-# BigQuery region of the INFORMATION_SCHEMA views ("us", "eu", "europe-west1", ...).
-region = "us"
+# BigQuery region(s) of the INFORMATION_SCHEMA views: "us", "eu", "europe-west1", ...
+regions = ["us"]
 
 # information_schema only. project | folder | organization | user
-#   project      -> JOBS_BY_PROJECT for each entry in `projects` (needs bigquery.jobs.listAll per project)
-#   folder       -> JOBS_BY_FOLDER of billing_project's parent folder (needs jobs.listAll on the folder)
-#   organization -> JOBS_BY_ORGANIZATION (needs jobs.listAll on the org)
-#   user         -> JOBS_BY_USER, your own jobs only, no extra permissions
+#   project      -> JOBS_BY_PROJECT for each entry in `projects` (needs bigquery.jobs.listAll per project,
+#                   e.g. roles/bigquery.resourceViewer)
+#   folder       -> JOBS_BY_FOLDER of billing_project's parent folder (jobs.listAll on the folder)
+#   organization -> JOBS_BY_ORGANIZATION (jobs.listAll on the org)
+#   user         -> JOBS_BY_USER: your own jobs, no extra permissions
 scope = "project"
 projects = ["my-admin-project", "my-data-project"]
 
@@ -24,17 +26,32 @@ projects = ["my-admin-project", "my-data-project"]
 # table = "my-admin-project.bq_audit_logs.cloudaudit_googleapis_com_data_access"
 
 [pricing]
-# On-demand analysis price used for the cost estimate.
+# auto:      jobs that ran in a reservation are priced in slot-hours, everything else on demand
+# on_demand: bytes billed × on_demand_usd_per_tib
+# slots:     slot-ms × slot_usd_per_hour (Editions pay-as-you-go: standard 0.04, enterprise 0.06, plus 0.10)
+mode = "auto"
 on_demand_usd_per_tib = 6.25
+slot_usd_per_hour = 0.06
+
+# Per-project overrides, same keys.
+# [pricing.projects]
+# "my-dbt-project" = { mode = "slots", slot_usd_per_hour = 0.04 }
 
 [quotas]
-# Optional daily QueryUsagePerDay caps per project. Shown as % used today.
+# Optional daily QueryUsagePerDay caps per project, shown as % used today (bytes billed since local midnight).
 # "my-data-project" = "10 TiB"
 # "my-agents-project" = "5 TiB"
 
+[budgets]
+# Optional daily spend budgets in USD, keyed by principal or project. Shown as % and coloured.
+# "svc-airflow@my-ingest-project.iam.gserviceaccount.com" = 50
+# "my-agents-project" = "$10"
+
 [ui]
-refresh_seconds = 60
-window_hours = 24
-timezone = "UTC"
+refresh_seconds = 60          # audit_log sources: 120 is plenty, each refresh rescans today's partition
+window_hours = 24             # initial window; `w` cycles 1h, 6h, 24h, 72h, 168h
+max_window_hours = 168        # how much history the local store keeps
+timezone = "UTC"              # for "today" (quotas, budgets) and clock columns
 top_n = 15
 stream_rows = 40
+timeline_buckets = 48
