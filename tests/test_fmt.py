@@ -25,3 +25,9 @@ def test_one_line_strips_dbt_header_and_truncates():
 def test_short_principal():
     assert fmt.short_principal("svc@proj.iam.gserviceaccount.com") == "svc@proj"
     assert fmt.short_principal("ada@acme.example") == "ada@acme.example"
+
+
+def test_dbt_node():
+    assert fmt.dbt_node("model.analytics.fact_usage") == "fact_usage (analytics)"
+    assert fmt.dbt_node("test.analytics.not_null_x") == "test: not_null_x (analytics)"
+    assert fmt.dbt_node("weird") == "weird"

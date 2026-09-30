@@ -64,7 +64,7 @@ def one_line(text: str | None, width: int) -> str:
 
 
 def short_principal(p: str) -> str:
-    """svc-airflow-prod@cdo-de-ingest-prod.iam.gserviceaccount.com -> svc-airflow-prod@cdo-de-ingest-prod"""
+    """svc-airflow@my-project.iam.gserviceaccount.com -> svc-airflow@my-project"""
     return p.replace(".iam.gserviceaccount.com", "") if p else "-"
 
 
@@ -97,3 +97,12 @@ def when(dt: datetime | None, tz: ZoneInfo) -> str:
         return "-"
     local = dt.astimezone(tz)
     return local.strftime("%H:%M:%S") if local.date() == datetime.now(tz).date() else local.strftime("%m-%d %H:%M")
+
+
+def dbt_node(node: str) -> str:
+    """model.analytics.fact_usage -> fact_usage (analytics) ; test.x.not_null_y -> test: not_null_y (x)"""
+    parts = node.split(".")
+    if len(parts) >= 3:
+        kind, pkg, name = parts[0], parts[1], ".".join(parts[2:])
+        return f"{name} ({pkg})" if kind == "model" else f"{kind}: {name} ({pkg})"
+    return node

@@ -1,0 +1,25 @@
+# Changelog
+
+## 0.3.0 (2026-09-30)
+
+- `bqtop --init` is an interactive setup: detects the gcloud project and timezone, asks source, scope,
+  pricing and refresh, writes the config and runs `--check`. `--init -y` writes the example silently.
+- dbt models panel: `d` swaps hot tables for cost per dbt model, parsed from dbt's query comment
+  (`node_id`). Also in `--once` output and `--json` (`by_model`).
+- Single-file binaries for macOS (arm64, x86_64) and Linux (arm64, x86_64) on every `v*` tag, via
+  PyInstaller, attached to the GitHub release together with a Homebrew formula.
+- Homebrew: `brew install dadadima/tap/bqtop`.
+- Release workflow also publishes to PyPI once a trusted publisher is configured.
+
+## 0.2.0 (2026-09-30)
+
+- Local job store with incremental refresh; sort, filter and window changes never hit BigQuery.
+- Pricing model: `auto` / `on_demand` / `slots`, per-project overrides, reservation-aware.
+- `[budgets]` in USD/day for principals and projects, next to `[quotas]`.
+- Cost sparkline, `/` filter, enter to drill down, job detail with full query, `?` help, `p` pause.
+- `--demo`, `--check` with permission hints, `--watch`, `--json`, `-f`, multi-region.
+- Tests, ruff, CI, screenshot from demo data.
+
+## 0.1.0 (2026-09-30)
+
+- First cut: INFORMATION_SCHEMA and audit-log sources, four panels, `--once`.

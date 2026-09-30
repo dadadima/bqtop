@@ -28,7 +28,8 @@ HELP = """\
 [b]q[/b]      quit                      [b]r[/b]  refresh now
 [b]w[/b]      wider window (1h → 6h → 24h → 72h → 168h → 1h)
 [b]s[/b]      cycle sort: cost, bytes, jobs, errors, slots
-[b]j[/b]      hide/show hot tables (widens the job stream)
+[b]j[/b]      hide/show the tables panel (widens the job stream)
+[b]d[/b]      tables panel: hot tables ↔ dbt models (cost per model, from dbt's query comment)
 [b]/[/b]      filter (principal, project, table, query text, error)
 [b]esc[/b]    clear filter / close dialog
 [b]p[/b]      pause auto-refresh
@@ -65,6 +66,7 @@ class BqTop(App):
         Binding("w", "cycle_window", "window"),
         Binding("s", "cycle_sort", "sort"),
         Binding("j", "toggle_tables", "tables"),
+        Binding("d", "toggle_models", "dbt models"),
         Binding("slash", "open_filter", "filter"),
         Binding("escape", "clear_filter", "clear", show=False),
         Binding("p", "toggle_pause", "pause"),
@@ -88,6 +90,7 @@ class BqTop(App):
         self.sort = "cost"
         self.filter = ""
         self.paused = False
+        self.show_models = False
         self.snap: Snapshot | None = None
 
     def compose(self) -> ComposeResult:
@@ -139,6 +142,12 @@ class BqTop(App):
     def action_toggle_tables(self) -> None:
         t = self.query_one("#tables", DataTable)
         t.display = not t.display
+
+    def action_toggle_models(self) -> None:
+        self.show_models = not self.show_models
+        t = self.query_one("#tables", DataTable)
+        t.display = True
+        self._render_local()
 
     def action_toggle_pause(self) -> None:
         self.paused = not self.paused
@@ -252,11 +261,33 @@ class BqTop(App):
             )
 
         t = self.query_one("#tables", DataTable)
-        _reset(t, ("table", "jobs", "who", "billed", "cost"))
-        for a in snap.by_table[: cfg.ui.top_n]:
-            t.add_row(
-                a.key, _n(a.jobs), str(len(a.principals)), fmt.bytes_(a.bytes_billed), fmt.money(a.cost), key=a.key
-            )
+        if self.show_models:
+            t.border_title = "dbt models · from the query comment (d: hot tables)"
+            _reset(t, ("model", "runs", "err", "billed", "cost", "slot-h"))
+            for a in snap.by_model[: cfg.ui.top_n]:
+                t.add_row(
+                    fmt.dbt_node(a.key),
+                    _n(a.jobs),
+                    err_cell(a.errors),
+                    fmt.bytes_(a.bytes_billed),
+                    fmt.money(a.cost),
+                    fmt.slot_hours(a.slot_ms),
+                    key=a.key,
+                )
+            if not snap.by_model:
+                t.add_row("no dbt query comments in this window", "", "", "", "", "", key="")
+        else:
+            t.border_title = "hot tables (d: dbt models)"
+            _reset(t, ("table", "jobs", "who", "billed", "cost"))
+            for a in snap.by_table[: cfg.ui.top_n]:
+                t.add_row(
+                    a.key,
+                    _n(a.jobs),
+                    str(len(a.principals)),
+                    fmt.bytes_(a.bytes_billed),
+                    fmt.money(a.cost),
+                    key=a.key,
+                )
 
         t = self.query_one("#jobs", DataTable)
         t.border_title = (

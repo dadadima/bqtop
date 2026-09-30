@@ -7,3 +7,4 @@ build/
 uv.lock
 bqtop.toml
 .DS_Store
+*.spec

@@ -132,3 +132,21 @@ def test_demo_source_runs_end_to_end():
     store.refresh(6)
     snap = store.snapshot(6)
     assert snap.totals.jobs > 50 and snap.jobs and snap.by_table
+
+
+def test_dbt_models_from_query_comment():
+    q = (
+        '/* {"app": "dbt", "dbt_version": "1.9.0", "profile_name": "x", '
+        '"node_id": "model.analytics.fact_usage"} */\nselect 1'
+    )
+    j1 = job(5, "svc@x", "p1", billed=2**40)
+    j1.query = q
+    j2 = job(6, "svc@x", "p1", billed=2**39)
+    j2.query = q
+    j3 = job(7, "ada@x", "p1", billed=2**40)  # no dbt comment
+    assert j1.dbt_node == "model.analytics.fact_usage" and j3.dbt_node is None
+    store = JobStore(FakeSource([j1, j2, j3]), Pricing(), tz="UTC")
+    store.refresh(1)
+    snap = store.snapshot(1)
+    assert [a.key for a in snap.by_model] == ["model.analytics.fact_usage"]
+    assert snap.by_model[0].jobs == 2 and snap.by_model[0].bytes_billed == 2**40 + 2**39

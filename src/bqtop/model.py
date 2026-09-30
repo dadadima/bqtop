@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
+
+_DBT_NODE = re.compile(r'"node_id"\s*:\s*"([^"]+)"')
 
 
 @dataclass
@@ -34,6 +37,14 @@ class Job:
     @property
     def done(self) -> bool:
         return self.state == "DONE"
+
+    @property
+    def dbt_node(self) -> str | None:
+        """dbt's default query comment carries the node id: /* {"app": "dbt", ..., "node_id": "model.x.y"} */"""
+        if not self.query or "node_id" not in self.query[:600]:
+            return None
+        m = _DBT_NODE.search(self.query[:600])
+        return m.group(1) if m else None
 
     def duration_s(self, now: datetime | None = None) -> float | None:
         if self.start_time is None:
@@ -99,6 +110,7 @@ class Snapshot:
     by_principal: list[Agg] = field(default_factory=list)
     by_project: list[Agg] = field(default_factory=list)
     by_table: list[Agg] = field(default_factory=list)
+    by_model: list[Agg] = field(default_factory=list)  # dbt nodes parsed from the query comment
     jobs: list[Job] = field(default_factory=list)
     timeline: list[float] = field(default_factory=list)  # cost per bucket, oldest first
     bucket_minutes: float = 0.0

@@ -165,6 +165,29 @@ def tables_table(snap: Snapshot, cfg: Config) -> Table:
     return tb
 
 
+def models_table(snap: Snapshot, cfg: Config) -> Table:
+    tb = Table(title="dbt models · from the query comment", expand=True, pad_edge=False)
+    for col, just in (
+        ("model", "left"),
+        ("runs", "right"),
+        ("err", "right"),
+        ("billed", "right"),
+        ("cost", "right"),
+        ("slot-h", "right"),
+    ):
+        tb.add_column(col, justify=just, no_wrap=True, overflow="ellipsis")
+    for a in snap.by_model[: cfg.ui.top_n]:
+        tb.add_row(
+            fmt.dbt_node(a.key),
+            f"{a.jobs:,}",
+            err_cell(a.errors),
+            fmt.bytes_(a.bytes_billed),
+            fmt.money(a.cost),
+            fmt.slot_hours(a.slot_ms),
+        )
+    return tb
+
+
 def jobs_table(snap: Snapshot, cfg: Config, width: int = 120) -> Table:
     tz = ZoneInfo(cfg.ui.timezone)
     tb = Table(title="jobs · running first, then newest", expand=True, pad_edge=False)

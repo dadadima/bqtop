@@ -10,12 +10,18 @@ It reads the metadata BigQuery already keeps, backfills once, then refreshes inc
 No agents, no sinks to build, no dashboards to click through.
 
 ```bash
-uv tool install git+https://github.com/dadadima/bqtop     # or: pipx install git+https://github.com/dadadima/bqtop
+brew install dadadima/tap/bqtop                            # macOS / Linux binary, no Python needed
+# or: uv tool install git+https://github.com/dadadima/bqtop   (pipx works too)
+# or: grab a binary from https://github.com/dadadima/bqtop/releases
+
 bqtop --demo                                               # look around on synthetic data, no GCP needed
-bqtop --init && $EDITOR ~/.config/bqtop/config.toml        # point it at your projects
-bqtop --check                                              # credentials, permissions, scan cost
+bqtop --init                                               # interactive setup: detects your project, writes the config
 bqtop                                                      # the TUI
 ```
+
+`bqtop --init` asks five questions (source, project, scope, pricing, timezone), writes
+`~/.config/bqtop/config.toml` and runs `bqtop --check`, which tells you who you are, what the source
+scan costs, and the exact role to grant if something is missing.
 
 ## What you see
 
@@ -26,6 +32,7 @@ bqtop                                                      # the TUI
 | principals     | who: jobs, running, errors, billed, cost, cost today, slot-hours, daily budget %                          |
 | projects       | where: same, plus today's `QueryUsagePerDay` quota % or budget %                                          |
 | hot tables     | which tables the money goes to (a job touching three tables counts against all three: an upper bound)     |
+| dbt models     | `d` swaps in cost per dbt model, parsed from dbt's query comment (`node_id`)                             |
 | jobs           | live stream, running first, then newest: state, principal, project, type, duration, billed, cost, query   |
 
 Press `enter` on a principal, project or table to drill down (everything filters to it), on a job to see
@@ -39,7 +46,8 @@ its details and full query text.
 | `r`     | refresh now                                                         |
 | `w`     | wider window: 1h → 6h → 24h → 72h → 168h                            |
 | `s`     | cycle sort: cost, bytes, jobs, errors, slots                        |
-| `j`     | hide/show hot tables (widens the job stream)                        |
+| `j`     | hide/show the tables panel (widens the job stream)                  |
+| `d`     | tables panel: hot tables ↔ dbt models                               |
 | `/`     | filter on principal, project, table, query text or error message   |
 | `esc`   | clear the filter / close a dialog                                   |
 | `p`     | pause auto-refresh                                                  |
@@ -140,6 +148,13 @@ what the last refresh billed and the session total. `bqtop --check` prints what 
 Storage Read API sessions, network egress, storage and streaming costs do not appear in job metadata.
 If you stream tables out with Spark, DuckDB or Arrow clients, that spend is invisible here; Cloud Billing
 export is the place for it. A billing-export source is the natural next step.
+
+## Releases
+
+Every `v*` tag builds single-file binaries (PyInstaller) for macOS arm64 / x86_64 and Linux arm64 /
+x86_64, attaches them to a GitHub release with their sha256 and a generated Homebrew formula, and
+updates [`dadadima/homebrew-tap`](https://github.com/dadadima/homebrew-tap). `scripts/build_binary.sh`
+does the same locally.
 
 ## Development
 

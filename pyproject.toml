@@ -1,6 +1,6 @@
 [project]
 name = "bqtop"
-version = "0.2.0"
+version = "0.3.0"
 description = "htop for BigQuery: live jobs, principals, projects, hot tables and cost in your terminal"
 readme = "README.md"
 license = "MIT"

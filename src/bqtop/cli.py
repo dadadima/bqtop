@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from bqtop import __version__
-from bqtop.config import Config, ConfigError, default_config_path, load
-
-EXAMPLE = Path(__file__).with_name("config.example.toml")
+from bqtop.config import Config, ConfigError, load
 
 HINTS = (
     (
@@ -43,12 +40,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--watch", type=int, metavar="SECONDS", help="plain-text mode: reprint every N seconds")
     ap.add_argument("--demo", action="store_true", help="run on synthetic data, no GCP needed")
     ap.add_argument("--check", action="store_true", help="check credentials, permissions and the source, then exit")
-    ap.add_argument("--init", action="store_true", help="write a starter config to ~/.config/bqtop/config.toml")
+    ap.add_argument("--init", action="store_true", help="interactive setup, writes ~/.config/bqtop/config.toml")
+    ap.add_argument("-y", "--yes", action="store_true", help="with --init: skip questions, write the example config")
     ap.add_argument("--version", action="version", version=f"bqtop {__version__}")
     args = ap.parse_args(argv)
 
     if args.init:
-        return _init(args.config)
+        from bqtop.wizard import run
+
+        return run(Path(args.config) if args.config else None, assume_yes=args.yes)
 
     if args.demo:
         cfg = Config.demo()
@@ -104,17 +104,6 @@ def main(argv: list[str] | None = None) -> int:
     from bqtop.app import BqTop
 
     BqTop(cfg, source).run()
-    return 0
-
-
-def _init(path: str | None) -> int:
-    dest = Path(path) if path else default_config_path()
-    if dest.exists():
-        print(f"bqtop: {dest} already exists, not overwriting", file=sys.stderr)
-        return 1
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(EXAMPLE, dest)
-    print(f"wrote {dest}\nedit [source], then run `bqtop --check` and `bqtop --once`.")
     return 0
 
 

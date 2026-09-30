@@ -110,6 +110,7 @@ class JobStore:
         by_p: dict[str, Agg] = {}
         by_j: dict[str, Agg] = {}
         by_t: dict[str, Agg] = {}
+        by_m: dict[str, Agg] = {}
         timeline = [0.0] * self.buckets
         bucket = timedelta(hours=window_hours) / self.buckets
         snap.bucket_minutes = bucket.total_seconds() / 60
@@ -129,6 +130,9 @@ class JobStore:
             if in_win:
                 for t in j.referenced_tables:
                     by_t.setdefault(t, Agg(t)).add(j, True, False)
+                node = j.dbt_node
+                if node:
+                    by_m.setdefault(node, Agg(node)).add(j, True, False)
                 idx = min(self.buckets - 1, int((j.creation_time - win_start) / bucket))
                 timeline[idx] += j.cost
                 stream.append(j)
@@ -144,6 +148,9 @@ class JobStore:
             reverse=True,
         )
         snap.by_table = sorted(by_t.values(), key=lambda a: (a.cost, a.bytes_billed, a.jobs), reverse=True)[
+            : self.top_n
+        ]
+        snap.by_model = sorted(by_m.values(), key=lambda a: (a.cost, a.bytes_billed, a.jobs), reverse=True)[
             : self.top_n
         ]
         stream.sort(key=lambda j: (j.state != "DONE", j.creation_time), reverse=True)
