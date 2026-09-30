@@ -108,6 +108,14 @@ def _project_check(value: str) -> str | None:
     return None
 
 
+def _projects_check(value: str) -> str | None:
+    for p in _list(value):
+        err = _project_check(p)
+        if err:
+            return err
+    return None
+
+
 def _list(s: str) -> list[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
@@ -163,8 +171,9 @@ def pick_folder(console: Console, detected_project: str) -> tuple[str, str, str,
         )
         runner = ask(
             console,
-            "     Project directly inside that folder to run bqtop's queries from",
+            "     Project id directly inside that folder to run bqtop's queries from",
             hint="BigQuery exposes a folder's jobs only through a project that sits right under it",
+            validate=_project_check,
         )
         region = "us"
     return runner, folder_id, label, region
@@ -202,6 +211,7 @@ def run(dest: Path | None = None, assume_yes: bool = False) -> int:
             "2/6  Project to run bqtop's queries from",
             default=detected or None,
             hint="any project in the organization you can run jobs in",
+            validate=_project_check,
         )
     else:
         billing = ask(
@@ -209,10 +219,13 @@ def run(dest: Path | None = None, assume_yes: bool = False) -> int:
             "2/6  Project to run bqtop's queries from",
             default=detected or None,
             hint="bqtop bills its own small queries here",
+            validate=_project_check,
         )
     projects = [billing]
     if scope == "project":
-        projects = _list(ask(console, "     Projects to watch, comma separated", default=billing))
+        projects = _list(
+            ask(console, "     Projects to watch, comma separated", default=billing, validate=_projects_check)
+        )
 
     # 3. source
     source = choose(console, "3/6  Where should the job data come from?", SOURCES, "information_schema")
@@ -222,7 +235,7 @@ def run(dest: Path | None = None, assume_yes: bool = False) -> int:
 
     # 4. region, 5. pricing, 6. timezone + refresh
     regions = _list(
-        ask(console, "4/6  BigQuery region(s)", default="us", hint="us, eu, europe-west1, … comma separated")
+        ask(console, "4/6  BigQuery region(s)", default=region_default, hint="us, eu, europe-west1, … comma separated")
     )
     pricing = choose(console, "5/6  How is BigQuery billed?", PRICINGS, "on_demand")
     slot_price = "0.06"

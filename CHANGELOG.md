@@ -1,9 +1,14 @@
 # Changelog
 
+## 0.3.6 (2026-09-30)
+
+- Project validation is now really wired into every wizard prompt (0.3.4 and 0.3.5 announced it but the
+  prompts did not call it). A folder or display name typed as project is refused on the spot.
+- Region default in the wizard comes from the folder probe.
+
 ## 0.3.5 (2026-09-30)
 
-- The project validation announced in 0.3.4 was not wired into the prompts; it is now, on every project
-  answer including the projects-to-watch list.
+- Version bump only (the intended fix did not land).
 
 ## 0.3.4 (2026-09-30)
 
