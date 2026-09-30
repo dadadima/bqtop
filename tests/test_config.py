@@ -68,3 +68,14 @@ def test_demo_config():
     cfg = Config.demo()
     assert cfg.source.kind == "demo"
     assert cfg.quotas and cfg.budgets
+
+
+def test_credentials_file(tmp_path: Path):
+    key = tmp_path / "key.json"
+    key.write_text("{}")
+    p = tmp_path / "bqtop.toml"
+    p.write_text(f'[source]\nbilling_project = "p"\ncredentials_file = "{key}"\n')
+    assert load(p).source.credentials_file == str(key)
+    p.write_text('[source]\nbilling_project = "p"\ncredentials_file = "/nope/key.json"\n')
+    with pytest.raises(ConfigError):
+        load(p)

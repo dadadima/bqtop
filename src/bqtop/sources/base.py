@@ -39,7 +39,13 @@ class Source(ABC):
     @property
     def client(self) -> bigquery.Client:
         if self._client is None:
-            self._client = bigquery.Client(project=self.cfg.source.billing_project)
+            src = self.cfg.source
+            if src.credentials_file:
+                self._client = bigquery.Client.from_service_account_json(
+                    src.credentials_file, project=src.billing_project
+                )
+            else:
+                self._client = bigquery.Client(project=src.billing_project)
         return self._client
 
     @abstractmethod
@@ -92,23 +98,48 @@ class Source(ABC):
         except Exception as e:
             out.append(("identity", False, _short(e)))
             return out
+        now = datetime.now().astimezone()
+        params = [
+            bigquery.ScalarQueryParameter("since", "TIMESTAMP", now - _DAY),
+            bigquery.ScalarQueryParameter("until", "TIMESTAMP", now),
+            bigquery.ScalarQueryParameter("floor", "TIMESTAMP", now - _DAY),
+            bigquery.ArrayQueryParameter("pending", "STRING", []),
+        ]
+        sql = self.base_sql().format(where=self.time_where())
         try:
-            sql = self.base_sql().format(where=self.time_where())
-            cfg = bigquery.QueryJobConfig(
-                dry_run=True,
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("since", "TIMESTAMP", datetime.now().astimezone() - _DAY),
-                    bigquery.ScalarQueryParameter("until", "TIMESTAMP", datetime.now().astimezone()),
-                    bigquery.ScalarQueryParameter("floor", "TIMESTAMP", datetime.now().astimezone() - _DAY),
-                    bigquery.ArrayQueryParameter("pending", "STRING", []),
-                ],
-            )
-            j = self.client.query(sql, job_config=cfg)
+            dry = self.client.query(sql, job_config=bigquery.QueryJobConfig(dry_run=True, query_parameters=params))
             out.append(
-                ("source", True, f"{self.describe()} · a 24h backfill scans ~{j.total_bytes_processed / 2**20:.0f} MiB")
+                (
+                    "source",
+                    True,
+                    f"{self.describe()} · a 24h backfill scans ~{dry.total_bytes_processed / 2**20:.0f} MiB",
+                )
             )
         except Exception as e:
             out.append(("source", False, _short(e)))
+            return out
+        try:
+            cov = (
+                "select count(*) as jobs, count(distinct project_id) as projects, "
+                "array_agg(distinct project_id ignore nulls order by project_id limit 12) as sample "
+                f"from (\n{sql}\n)"
+            )
+            row = list(self.client.query(cov, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())[0]
+            sample = ", ".join(row["sample"] or [])
+            more = "" if row["projects"] <= 12 else f", … ({row['projects']} total)"
+            ok = row["jobs"] > 0
+            detail = f"{row['jobs']:,} jobs across {row['projects']} project(s) in the last 24h: {sample}{more}"
+            if not ok:
+                detail = "no jobs in the last 24h: check scope/projects, or the sink is not receiving events"
+            elif self.cfg.source.scope == "folder" and row["projects"] == 1:
+                detail += (
+                    " · only the billing project itself: JOBS_BY_FOLDER covers the folder that directly contains "
+                    "billing_project (plus its sub-folders), so pick a project that sits directly under the folder "
+                    'you want to watch, or use scope = "project" with an explicit list'
+                )
+            out.append(("coverage", ok, detail))
+        except Exception as e:
+            out.append(("coverage", False, _short(e)))
         return out
 
     # ---- helpers -----------------------------------------------------------------------------

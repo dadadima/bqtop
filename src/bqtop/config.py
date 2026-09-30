@@ -62,6 +62,7 @@ class SourceConfig:
     scope: str = "project"
     projects: list[str] = field(default_factory=list)
     table: str = ""
+    credentials_file: str = ""  # service-account key; default is Application Default Credentials
 
     def __post_init__(self) -> None:
         if not self.regions:
@@ -127,6 +128,10 @@ def _parse(p: Path) -> Config:
         raise ConfigError(f"[source].kind must be one of {KINDS}, got {src.kind!r}")
     if src.kind != "demo" and not src.billing_project:
         raise ConfigError("[source].billing_project is required")
+    if src.credentials_file:
+        src.credentials_file = os.path.expanduser(src.credentials_file)
+        if not os.path.isfile(src.credentials_file):
+            raise ConfigError(f"[source].credentials_file not found: {src.credentials_file}")
     if src.kind == "audit_log" and not src.table:
         raise ConfigError("[source].table is required for kind = audit_log")
     if src.kind == "information_schema":

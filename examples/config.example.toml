@@ -16,7 +16,9 @@ regions = ["us"]
 # information_schema only. project | folder | organization | user
 #   project      -> JOBS_BY_PROJECT for each entry in `projects` (needs bigquery.jobs.listAll per project,
 #                   e.g. roles/bigquery.resourceViewer)
-#   folder       -> JOBS_BY_FOLDER of billing_project's parent folder (jobs.listAll on the folder)
+#   folder       -> JOBS_BY_FOLDER: every project in the folder that DIRECTLY contains billing_project, plus its
+#                   sub-folders (jobs.listAll on that folder). To watch a whole tree, pick a billing_project that sits
+#                   right under the top folder; `bqtop --check` prints how many projects it actually sees.
 #   organization -> JOBS_BY_ORGANIZATION (jobs.listAll on the org)
 #   user         -> JOBS_BY_USER: your own jobs, no extra permissions
 scope = "project"
@@ -24,6 +26,10 @@ projects = ["my-admin-project", "my-data-project"]
 
 # audit_log only: the routed data-access table.
 # table = "my-admin-project.bq_audit_logs.cloudaudit_googleapis_com_data_access"
+
+# Optional: a service-account key to use instead of Application Default Credentials. Handy when your
+# user login expires or you want a dedicated read-only identity for the dashboard.
+# credentials_file = "~/.config/gcloud/bqtop-reader.json"
 
 [pricing]
 # auto:      jobs that ran in a reservation are priced in slot-hours, everything else on demand

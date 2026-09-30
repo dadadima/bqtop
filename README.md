@@ -67,13 +67,16 @@ Pick one with `[source].kind`. Both are standard GCP surfaces.
 | `audit_log`          | a routed `cloudaudit_googleapis_com_data_access` table            | no           | `dataViewer` on the sink table, `jobUser` on the billing project                                         |
 
 `information_schema` is the default: real time, includes `RUNNING` jobs, nothing to set up.
-`scope = "folder"` gives one view over every project under the folder containing `billing_project`.
+`scope = "folder"` gives one view over every project under the folder that directly contains
+`billing_project`, sub-folders included. To watch a whole tree, run bqtop from a project that sits right
+under the top folder; `bqtop --check` prints how many projects the source actually sees.
 `audit_log` is for setups that already route BigQuery audit logs to a table (a folder- or org-level
 sink), which also works when you cannot get `jobs.listAll` everywhere.
 
 Authentication is whatever `google-cloud-bigquery` finds: Application Default Credentials
 (`gcloud auth application-default login`), a service-account key via `GOOGLE_APPLICATION_CREDENTIALS`,
-or the metadata server. `bqtop --check` tells you who you are and what is missing.
+or the metadata server. Set `[source].credentials_file` to a service-account key to pin the identity
+instead, useful when your user login expires daily. `bqtop --check` tells you who you are and what is missing.
 
 ## Configuration
 

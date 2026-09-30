@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 (2026-09-30)
+
+- `[source].credentials_file`: run bqtop as a service account instead of Application Default
+  Credentials, for setups where the user login expires.
+- `--check` reports the identity actually used and the coverage: jobs and projects seen in the last 24h,
+  with a hint when `JOBS_BY_FOLDER` only sees the billing project itself.
+
 ## 0.3.0 (2026-09-30)
 
 - `bqtop --init` is an interactive setup: detects the gcloud project and timezone, asks source, scope,
